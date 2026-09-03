@@ -396,6 +396,73 @@ def clear_cancel_state(path: str) -> None:
         cancel_events.pop(path, None)
 
 # ============================================================================
+# PARAKEET FAST PATH
+# ============================================================================
+#
+# Bazarr's /asr calls always carry the source audio's language (detected
+# from the track tag or a prior /detect-language call), before any
+# transcription starts. For same-language requests in a language Parakeet
+# TDT 0.6B v3 supports, that model is several times faster than whisper on
+# CPU; it has no translation mode, so translate tasks always fall back to
+# whisper regardless of language.
+
+PARAKEET_ENABLED = convert_to_bool(os.getenv('PARAKEET_ENABLED', False))
+PARAKEET_QUANTIZATION = os.getenv('PARAKEET_QUANTIZATION', 'int8')
+
+PARAKEET_LANGUAGES = frozenset({
+    'bg', 'hr', 'cs', 'da', 'nl', 'en', 'et', 'fi', 'fr', 'de', 'el', 'hu',
+    'it', 'lv', 'lt', 'mt', 'pl', 'pt', 'ro', 'sk', 'sl', 'es', 'sv', 'ru',
+    'uk',
+})
+
+_parakeet_model = None
+_parakeet_lock = Lock()
+
+def get_parakeet_model():
+    global _parakeet_model
+    with _parakeet_lock:
+        if _parakeet_model is None:
+            import onnx_asr
+            base = onnx_asr.load_model('nemo-parakeet-tdt-0.6b-v3', quantization=PARAKEET_QUANTIZATION)
+            vad = onnx_asr.load_vad('silero')
+            _parakeet_model = base.with_vad(vad).with_timestamps()
+    return _parakeet_model
+
+def should_use_parakeet(task: str, language, encode: bool, output_format: str) -> bool:
+    if not PARAKEET_ENABLED or encode or task != 'transcribe' or output_format == 'verbose_json':
+        return False
+    return bool(language) and str(language).lower() in PARAKEET_LANGUAGES
+
+def _srt_timestamp(seconds: float) -> str:
+    total_ms = max(0, round(seconds * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+def parakeet_segments_to_output(segments, output_format: str) -> str:
+    segments = list(segments)
+    text = ' '.join(seg.text.strip() for seg in segments).strip()
+
+    if output_format == 'text':
+        return text
+    if output_format == 'json':
+        return json.dumps({"text": text})
+
+    if output_format == 'vtt':
+        lines = ['WEBVTT', '']
+        for seg in segments:
+            start = _srt_timestamp(seg.start).replace(',', '.')
+            end = _srt_timestamp(seg.end).replace(',', '.')
+            lines.extend([f"{start} --> {end}", seg.text.strip(), ''])
+        return '\n'.join(lines)
+
+    lines = []
+    for i, seg in enumerate(segments, start=1):
+        lines.extend([str(i), f"{_srt_timestamp(seg.start)} --> {_srt_timestamp(seg.end)}", seg.text.strip(), ''])
+    return '\n'.join(lines)
+
+# ============================================================================
 # TRANSCRIPTION WORKER
 # ============================================================================
 
@@ -1142,13 +1209,22 @@ def asr_task_worker(task_data: dict) -> None:
         _initial_prompt = task_data.get('initial_prompt')
         file_content = task_data['audio_content']
         encode = task_data['encode']
-        
+        output_format = task_data.get('output_format', 'srt')
+
+        if should_use_parakeet(task, language, encode, output_format):
+            logging.info(f"Routing ASR (ID: {task_id}) to Parakeet fast path (language={language})")
+            audio = np.frombuffer(file_content, np.int16).flatten().astype(np.float32) / 32768.0
+            segments = get_parakeet_model().recognize(audio, sample_rate=16000)
+            if result_container:
+                result_container.set_result(parakeet_segments_to_output(segments, output_format))
+            return
+
         start_model()
 
         args = {}
         display_name = os.path.basename(video_file) if video_file else task_id
         args['progress_callback'] = ProgressHandler(display_name, cancel_path=task_id)
-        
+
         # Handle audio encoding
         if encode:
             args['audio'] = file_content
@@ -1177,7 +1253,6 @@ def asr_task_worker(task_data: dict) -> None:
         
         # Set result for blocking endpoint
         if result_container:
-            output_format = task_data.get('output_format', 'srt')
             if output_format == 'json':
                 formatted = json.dumps({"text": result.text.strip()})
             elif output_format == 'text':
