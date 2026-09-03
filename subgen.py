@@ -69,7 +69,7 @@ import numpy as np
 import requests
 import stable_whisper
 import torch
-from fastapi import Body, FastAPI, File, Form, Header, Query, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from stable_whisper import Segment
 from watchdog.events import FileSystemEventHandler
@@ -344,8 +344,46 @@ class DeduplicatedQueue(queue.PriorityQueue):
         with self._lock:
             return list(self._processing)
 
-# Start queue
 task_queue = DeduplicatedQueue()
+
+# ============================================================================
+# TASK CANCELLATION
+# ============================================================================
+
+class TranscriptionCancelled(Exception):
+    """Raised inside a transcription in progress to unwind it early."""
+    pass
+
+# Paths cancelled while still queued (worker skips them instead of running).
+cancelled_paths = set()
+cancelled_paths_lock = Lock()
+
+# Per-path cancellation flags for in-flight transcriptions. Checked from
+# ProgressHandler, which is invoked frequently during model.transcribe().
+cancel_events = {}
+cancel_events_lock = Lock()
+
+def cancel_task(path: str) -> bool:
+    """Requests cancellation of a queued or in-progress task for `path`.
+
+    Returns True if a matching task was found (queued or processing),
+    False otherwise. Cancellation of an in-progress task is cooperative:
+    it takes effect the next time its progress callback fires, not
+    immediately.
+    """
+    found = task_queue.is_active(path)
+    with cancelled_paths_lock:
+        cancelled_paths.add(path)
+    with cancel_events_lock:
+        cancel_events.setdefault(path, threading.Event()).set()
+    return found
+
+def clear_cancel_state(path: str) -> None:
+    """Clears cancellation bookkeeping once a task is no longer active."""
+    with cancelled_paths_lock:
+        cancelled_paths.discard(path)
+    with cancel_events_lock:
+        cancel_events.pop(path, None)
 
 # ============================================================================
 # TRANSCRIPTION WORKER
@@ -361,7 +399,13 @@ def transcription_worker():
             task_type = task.get("type", "transcribe")
             path = task.get("path", "unknown")
             display_name = os.path.basename(path) if ("/" in str(path) or "\\" in str(path)) else path
-            
+
+            with cancelled_paths_lock:
+                was_cancelled_while_queued = path in cancelled_paths
+            if was_cancelled_while_queued:
+                logging.info(f"Skipping cancelled task: {display_name}")
+                continue
+
             # Status for START log
             proc_count = len(task_queue.get_processing_tasks())
             queue_count = len(task_queue.get_queued_tasks())
@@ -409,7 +453,8 @@ def transcription_worker():
             if task:
                 task_queue.task_done()
                 task_queue.mark_done(task)
-                
+                clear_cancel_state(path)
+
                 # Now that the detect task is removed from processing, it's safe to queue the transcription
                 if next_task:
                     if task_queue.put(next_task):
@@ -476,8 +521,9 @@ logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 
 
 class ProgressHandler:
-    def __init__(self, filename):
+    def __init__(self, filename, cancel_path=None):
         self.filename = filename
+        self.cancel_path = cancel_path
         self.start_time = time.time()
         self.last_print_time = 0
         self.interval = 5
@@ -492,6 +538,12 @@ class ProgressHandler:
         return f"{m:02d}:{s:02d}"
 
     def __call__(self, seek, total):
+        if self.cancel_path is not None:
+            with cancel_events_lock:
+                event = cancel_events.get(self.cancel_path)
+            if event is not None and event.is_set():
+                raise TranscriptionCancelled(self.cancel_path)
+
         if docker_status == 'Docker' or debug:
             current_time = time.time()
             if self.last_print_time == 0 or (current_time - self.last_print_time) >= self.interval:
@@ -551,6 +603,23 @@ def webui():
 @app.get("/status")
 def status():
     return {"version": f"Subgen {subgen_version}, stable-ts {stable_whisper.__version__}, faster-whisper {faster_whisper.__version__} ({docker_status})"}
+
+@app.get("/queue")
+def get_queue():
+    """Lists currently processing and queued transcription tasks by path."""
+    return {
+        "processing": task_queue.get_processing_tasks(),
+        "queued": task_queue.get_queued_tasks(),
+    }
+
+@app.post("/queue/cancel")
+def cancel_queue_task(path: str = Query(...)):
+    """Cancels a queued or in-progress task. In-progress cancellation is
+    cooperative and takes effect at the next progress callback, not
+    instantly."""
+    if not cancel_task(path):
+        raise HTTPException(status_code=404, detail=f"No active or queued task for path: {path}")
+    return {"status": "cancelling", "path": path}
 
 @app.post("/tautulli")
 def receive_tautulli_webhook(
@@ -1068,7 +1137,7 @@ def asr_task_worker(task_data: dict) -> None:
 
         args = {}
         display_name = os.path.basename(video_file) if video_file else task_id
-        args['progress_callback'] = ProgressHandler(display_name)
+        args['progress_callback'] = ProgressHandler(display_name, cancel_path=task_id)
         
         # Handle audio encoding
         if encode:
@@ -1128,11 +1197,16 @@ def asr_task_worker(task_data: dict) -> None:
                 formatted = result.to_srt_vtt(filepath=None, word_level=word_level_highlight)
             result_container.set_result(formatted)
 
+    except TranscriptionCancelled:
+        logging.info(f"ASR task cancelled by user: {task_id}")
+        if result_container:
+            result_container.set_error("Cancelled by user")
+
     except Exception as e:
         logging.error(f"Error processing ASR (ID: {task_id}): {e}", exc_info=True)
-        if result_container: 
+        if result_container:
             result_container.set_error(str(e))
-    
+
     finally:
         delete_model()
 
@@ -1593,7 +1667,7 @@ def gen_subtitles(file_path: str, transcription_type: str, force_language: Langu
         
         args = {}
         display_name = os.path.basename(file_path)
-        args['progress_callback'] = ProgressHandler(display_name)
+        args['progress_callback'] = ProgressHandler(display_name, cancel_path=file_path)
             
         if custom_regroup and custom_regroup.lower() != 'default':
             args['regroup'] = custom_regroup
@@ -1623,9 +1697,14 @@ def gen_subtitles(file_path: str, transcription_type: str, force_language: Langu
             if file_path in task_results:
                 task_results[file_path].set_result(result.to_srt_vtt(filepath=None, word_level=word_level_highlight))
 
+    except TranscriptionCancelled:
+        logging.info(f"Transcription cancelled by user: {file_path}")
+        with task_results_lock:
+            if file_path in task_results:
+                task_results[file_path].set_error("Cancelled by user")
+
     except Exception as e:
         logging.info(f"Error processing or transcribing {file_path} in {force_language}: {e}")
-        # FIX: Inform waiting ASR endpoint requests of the error so they don't hang
         with task_results_lock:
             if file_path in task_results:
                 task_results[file_path].set_error(str(e))

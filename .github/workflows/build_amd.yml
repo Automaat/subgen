@@ -1,16 +1,6 @@
 name: Build AMD Docker image
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - 'subgen.py'
-      - 'language_code.py'
-      - 'launcher.py'
-      - 'requirements.txt'
-      - 'entrypoint.sh'
-      - 'Dockerfile.AMD'
-      - '.github/workflows/build_amd.yml'
   workflow_dispatch:
 
 concurrency:
