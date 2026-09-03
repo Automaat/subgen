@@ -1,16 +1,6 @@
 name: Build GPU Docker image
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - 'subgen.py'
-      - 'language_code.py'
-      - 'launcher.py'
-      - 'requirements.txt'
-      - 'entrypoint.sh'
-      - 'Dockerfile'
-      - '.github/workflows/build_GPU.yml'
   workflow_dispatch:
 
 concurrency:
