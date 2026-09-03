@@ -69,7 +69,17 @@ import numpy as np
 import requests
 import stable_whisper
 import torch
-from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    Body,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from stable_whisper import Segment
 from watchdog.events import FileSystemEventHandler
