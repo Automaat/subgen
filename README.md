@@ -6,6 +6,8 @@
 <details>
 <summary><strong>Updates:</strong></summary>
 
+11 Sep 2026: Added a minimal read-only queue page at `http://subgen:9000/` showing running and queued tasks, per-task progress (percent, speed, ETA) for both whisper and the Parakeet fast path, and cancel buttons. `GET /queue` now also returns a `progress` map. Parakeet jobs can now be cancelled mid-run.
+
 7 Jun 2026: Fixed a bug where files containing only a **forced** embedded subtitle track were incorrectly treated as having full subtitle coverage and skipped. Forced tracks cover only a small fraction of dialogue (typically foreign-language inserts) and should not count as full coverage. Added `IGNORE_FORCED_SUBTITLES` (default `True`) to control this behaviour.
 
 11 Apr 2026: Fixed subtitle timing on files with audio stream offsets (common in Amazon WEB-DL). Whisper ignores silence padding, causing subtitles to be early by the offset amount. Subgen now detects this via ffprobe and compensates automatically when the source video file is accessible. See [Audio Start-Time Offset Fix](#-audio-start-time-offset-fix) for details.

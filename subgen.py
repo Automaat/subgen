@@ -80,7 +80,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from stable_whisper import Segment
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver as Observer
@@ -395,6 +395,32 @@ def clear_cancel_state(path: str) -> None:
     with cancel_events_lock:
         cancel_events.pop(path, None)
 
+def raise_if_cancelled(path) -> None:
+    with cancel_events_lock:
+        event = cancel_events.get(path)
+    if event is not None and event.is_set():
+        raise TranscriptionCancelled(path)
+
+task_progress = {}
+task_progress_lock = Lock()
+
+def update_progress(path: str, name: str, engine: str, seek: float, total: float) -> None:
+    """Records seconds of audio processed out of `total` for an in-flight
+    task; `started` is kept from the first call so clients can derive speed
+    and ETA."""
+    now = time.time()
+    with task_progress_lock:
+        entry = task_progress.setdefault(path, {"started": now})
+        entry.update(name=name, engine=engine, seek=float(seek), total=float(total), updated=now)
+
+def clear_progress(path: str) -> None:
+    with task_progress_lock:
+        task_progress.pop(path, None)
+
+def get_progress_snapshot() -> dict:
+    with task_progress_lock:
+        return {path: dict(entry) for path, entry in task_progress.items()}
+
 # ============================================================================
 # PARAKEET FAST PATH
 # ============================================================================
@@ -531,6 +557,7 @@ def transcription_worker():
                 task_queue.task_done()
                 task_queue.mark_done(task)
                 clear_cancel_state(path)
+                clear_progress(path)
 
                 # Now that the detect task is removed from processing, it's safe to queue the transcription
                 if next_task:
@@ -616,10 +643,8 @@ class ProgressHandler:
 
     def __call__(self, seek, total):
         if self.cancel_path is not None:
-            with cancel_events_lock:
-                event = cancel_events.get(self.cancel_path)
-            if event is not None and event.is_set():
-                raise TranscriptionCancelled(self.cancel_path)
+            raise_if_cancelled(self.cancel_path)
+            update_progress(self.cancel_path, self.filename, 'whisper', seek, total)
 
         if docker_status == 'Docker' or debug:
             current_time = time.time()
@@ -673,9 +698,134 @@ def appendLine(result):
 def handle_get_request(request: Request):
     return {"You accessed this request incorrectly via a GET request. See https://github.com/McCloudS/subgen for proper configuration"}
 
-@app.get("/")
+WEBUI_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subgen queue</title>
+<style>
+:root { color-scheme: light dark; --bg: hsl(220 20% 97%); --fg: hsl(225 25% 15%); --muted: hsl(220 9% 46%); --card: hsl(0 0% 100%); --line: hsl(220 14% 90%); --accent: hsl(220 84% 55%); --danger: hsl(2 64% 58%); }
+@media (prefers-color-scheme: dark) { :root { --bg: hsl(225 14% 9%); --fg: hsl(225 20% 92%); --muted: hsl(220 9% 64%); --card: hsl(224 14% 13%); --line: hsl(222 13% 19%); --accent: hsl(222 100% 68%); } }
+body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+main { max-width: 760px; margin: 0 auto; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+.meta, .path, .stats { color: var(--muted); font-size: 12px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
+.row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.path { overflow-wrap: anywhere; }
+.bar { height: 8px; background: var(--line); border-radius: 4px; margin: 10px 0 6px; overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); }
+.bar.busy > div { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 16px; font-variant-numeric: tabular-nums; }
+.tag { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+button:hover { border-color: var(--danger); color: var(--danger); }
+.empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<h1>Subgen queue</h1>
+<div class="meta" id="status">Loading...</div>
+<h2>Processing</h2>
+<div id="processing"></div>
+<h2>Queued</h2>
+<div id="queued"></div>
+</main>
+<script>
+const fmt = (s) => {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const ss = String(sec).padStart(2, '0');
+  return h ? h + ':' + String(m).padStart(2, '0') + ':' + ss : m + ':' + ss;
+};
+const basename = (p) => p.split('/').pop();
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+};
+
+async function cancelTask(path) {
+  if (!confirm('Cancel ' + basename(path) + '?')) return;
+  await fetch('queue/cancel?path=' + encodeURIComponent(path), { method: 'POST' });
+  refresh();
+}
+
+function card(path, name) {
+  const c = el('div', 'card');
+  const row = el('div', 'row');
+  const left = el('div');
+  left.append(el('div', 'name', name || basename(path)), el('div', 'path', path));
+  const btn = el('button', null, 'Cancel');
+  btn.onclick = () => cancelTask(path);
+  row.append(left, btn);
+  c.append(row);
+  return c;
+}
+
+function processingCard(path, p, now) {
+  const c = card(path, p && p.name);
+  const bar = el('div', 'bar');
+  const fill = el('div');
+  bar.append(fill);
+  const stats = el('div', 'stats');
+  if (p && p.total > 0) {
+    const pct = Math.min(100, (p.seek / p.total) * 100);
+    const elapsed = now - p.started;
+    const speed = elapsed > 0 ? p.seek / elapsed : 0;
+    fill.style.width = pct.toFixed(1) + '%';
+    stats.append(
+      el('span', 'tag', p.engine),
+      el('span', null, pct.toFixed(1) + '%'),
+      el('span', null, fmt(p.seek) + ' / ' + fmt(p.total)),
+      el('span', null, speed.toFixed(1) + 'x realtime'),
+      el('span', null, 'elapsed ' + fmt(elapsed)),
+      el('span', null, speed > 0 ? 'ETA ' + fmt((p.total - p.seek) / speed) : 'ETA -'),
+    );
+  } else {
+    bar.classList.add('busy');
+    stats.append(el('span', null, 'Starting (no progress reported yet)'));
+  }
+  c.append(bar, stats);
+  return c;
+}
+
+async function refresh() {
+  const status = document.getElementById('status');
+  try {
+    const r = await fetch('queue', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const progress = d.progress || {};
+    document.getElementById('processing').replaceChildren(...(d.processing.length
+      ? d.processing.map((p) => processingCard(p, progress[p], d.now))
+      : [el('div', 'empty', 'Nothing running')]));
+    document.getElementById('queued').replaceChildren(...(d.queued.length
+      ? d.queued.map((p) => card(p))
+      : [el('div', 'empty', 'Queue empty')]));
+    status.textContent = d.processing.length + ' processing, ' + d.queued.length + ' queued. Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    status.textContent = 'Failed to load queue: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
+"""
+
+@app.get("/", response_class=HTMLResponse)
 def webui():
-    return {"The webui for configuration was removed on 1 October 2024, please configure via environment variables or in your Docker settings. "}
+    """Minimal read-only queue page with per-task progress and cancel buttons."""
+    return WEBUI_HTML
 
 @app.get("/status")
 def status():
@@ -683,10 +833,13 @@ def status():
 
 @app.get("/queue")
 def get_queue():
-    """Lists currently processing and queued transcription tasks by path."""
+    """Lists processing and queued tasks by path, plus per-path progress
+    (seconds of audio done vs total) for tasks that have reported any."""
     return {
         "processing": task_queue.get_processing_tasks(),
         "queued": task_queue.get_queued_tasks(),
+        "progress": get_progress_snapshot(),
+        "now": time.time(),
     }
 
 @app.post("/queue/cancel")
@@ -1210,11 +1363,18 @@ def asr_task_worker(task_data: dict) -> None:
         file_content = task_data['audio_content']
         encode = task_data['encode']
         output_format = task_data.get('output_format', 'srt')
+        display_name = os.path.basename(video_file) if video_file else task_id
 
         if should_use_parakeet(task, language, encode, output_format):
             logging.info(f"Routing ASR (ID: {task_id}) to Parakeet fast path (language={language})")
             audio = np.frombuffer(file_content, np.int16).flatten().astype(np.float32) / 32768.0
-            segments = get_parakeet_model().recognize(audio, sample_rate=16000)
+            total = len(audio) / 16000
+            update_progress(task_id, display_name, 'parakeet', 0, total)
+            segments = []
+            for segment in get_parakeet_model().recognize(audio, sample_rate=16000):
+                raise_if_cancelled(task_id)
+                segments.append(segment)
+                update_progress(task_id, display_name, 'parakeet', segment.end, total)
             if result_container:
                 result_container.set_result(parakeet_segments_to_output(segments, output_format))
             return
@@ -1222,7 +1382,6 @@ def asr_task_worker(task_data: dict) -> None:
         start_model()
 
         args = {}
-        display_name = os.path.basename(video_file) if video_file else task_id
         args['progress_callback'] = ProgressHandler(display_name, cancel_path=task_id)
 
         # Handle audio encoding
