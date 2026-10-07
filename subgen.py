@@ -183,6 +183,11 @@ skip_audio_languages = ([LanguageCode.from_string(code) for code in get_env_with
     if get_env_with_fallback('SKIP_IF_AUDIO_LANGUAGES', 'SKIP_IF_AUDIO_TRACK_IS')
     else[]
 )
+# NONE would match any subtitle file, so unparseable codes are dropped.
+skip_if_external_subtitle_languages = [
+    lang for lang in (LanguageCode.from_string(code) for code in os.getenv('SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES', '').split("|"))
+    if lang is not LanguageCode.NONE
+]
 
 # Additional Subtitle Configuration - with backwards compatibility
 subtitle_language_naming_type = os.getenv('SUBTITLE_LANGUAGE_NAMING_TYPE', 'ISO_639_2_B')
@@ -2352,6 +2357,12 @@ def should_skip_file(file_path: str, target_language: LanguageCode, audio_langs=
             logging.info(f"Skipping {base_name}: External subtitles in {lang_name} already exist.")
             return True
 
+    # 7. Skip if an external subtitle (subgen-made or not) exists in any listed language.
+    for external_lang in skip_if_external_subtitle_languages:
+        if has_external_subtitle_in_language(file_path, external_lang, recursion=True, only_match_subgen_subtitles=False, ignore_forced=ignore_forced_subtitles):
+            logging.info(f"Skipping {base_name}: External subtitles in {external_lang.to_name()} already exist.")
+            return True
+
     return False
     
 def get_subtitle_languages(video_path):
@@ -2448,13 +2459,14 @@ def has_internal_subtitle_in_language(video_file: str, target_language: Language
         logging.error(f"An error occurred while checking the file with pyav: {type(e).__name__}: {e}")
         return False
 
-def has_external_subtitle_in_language(video_file: str, target_language: LanguageCode, recursion: bool = True, only_match_subgen_subtitles: bool = False) -> bool:
+def has_external_subtitle_in_language(video_file: str, target_language: LanguageCode, recursion: bool = True, only_match_subgen_subtitles: bool = False, ignore_forced: bool = False) -> bool:
     """Checks if the given folder has a subtitle file with the given language.
     Args:
         video_file (str): The path of the video file.
         target_language (LanguageCode): The language of the subtitle file to search for.
         recursion (bool): If True, search subfolders. If False, only the current folder.
         only_match_subgen_subtitles (bool): If True, only skip if subtitles are auto-generated ("subgen").
+        ignore_forced (bool): If True, ignore subtitle files tagged "forced" (e.g. Movie.en.forced.srt).
     Returns:
         bool: True if a matching subtitle file is found, False otherwise.
     """
@@ -2485,6 +2497,9 @@ def has_external_subtitle_in_language(video_file: str, target_language: Language
             # Check for "subgen"
             has_subgen = "subgen" in subtitle_parts
 
+            if ignore_forced and "forced" in (part.lower() for part in subtitle_parts):
+                continue
+
             # When audio language is unknown, decide based on whether this subtitle counts.
             if target_language == LanguageCode.NONE:
                 if only_match_subgen_subtitles:
@@ -2502,7 +2517,7 @@ def has_external_subtitle_in_language(video_file: str, target_language: Language
 
         # Recursively search subfolders
         elif os.path.isdir(file_path) and recursion:
-            if has_external_subtitle_in_language(os.path.join(file_path, os.path.basename(video_file)), target_language, False, only_match_subgen_subtitles):
+            if has_external_subtitle_in_language(os.path.join(file_path, os.path.basename(video_file)), target_language, False, only_match_subgen_subtitles, ignore_forced):
                 return True
 
     return False

@@ -199,6 +199,21 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
     </div>
   </div>
 
+  <div class="sgroup">
+    <div class="slabel">Skip based on external subtitle language</div>
+    <div class="srow" style="flex-direction:column;align-items:flex-start">
+      <span class="env-name" style="margin-bottom:4px">SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES</span>
+      <span class="env-desc" style="margin-bottom:6px">Skip if an external subtitle file in any of these languages exists, subgen-named or not. SKIP_ONLY_SUBGEN_SUBTITLES has no effect here.</span>
+      <div class="chips" id="skipExtLangs">
+        <span class="chip" data-l="english"  onclick="toggleChip(this)">english</span>
+        <span class="chip" data-l="french"   onclick="toggleChip(this)">french</span>
+        <span class="chip" data-l="spanish"  onclick="toggleChip(this)">spanish</span>
+        <span class="chip" data-l="german"   onclick="toggleChip(this)">german</span>
+        <span class="chip" data-l="japanese" onclick="toggleChip(this)">japanese</span>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ── FILE STATE ── -->
@@ -368,6 +383,7 @@ function go(){
   const onlySubgen=c('onlySubgen');
   const skipInternalLang=v('skipInternalLang');
   const skipSubLangs=chipsOn('skipSubLangs');
+  const skipExtLangs=chipsOn('skipExtLangs');
   const targetLang=audioLang;
 
   document.getElementById('targetPill').innerHTML=`<span class="label">target →</span> <strong>${targetLang}</strong>`;
@@ -476,6 +492,24 @@ function go(){
     } else {
       checks.push({label:'Embedded subtitle language in skip list (SKIP_SUBTITLE_LANGUAGES)',state:'na',
         msg:'SKIP_SUBTITLE_LANGUAGES is empty.'});
+    }
+  }
+
+  // SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES
+  if(!skipReason){
+    if(skipExtLangs.length){
+      const matched=extFiles.find(f=>skipExtLangs.includes(f.lang));
+      if(matched){
+        checks.push({label:'External subtitle language in skip list (SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES)',state:'hit',
+          msg:`Found an external <strong>${matched.lang}</strong> subtitle file — in SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES list.`});
+        skipReason=`External subtitle language (${matched.lang}) is in the skip list.`;
+      } else {
+        checks.push({label:'External subtitle language in skip list (SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES)',state:'ok',
+          msg:`No external subtitle file matches the SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES list [${skipExtLangs.join(', ')}].`});
+      }
+    } else {
+      checks.push({label:'External subtitle language in skip list (SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES)',state:'na',
+        msg:'SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES is empty.'});
     }
   }
 
