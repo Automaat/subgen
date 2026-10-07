@@ -36,6 +36,8 @@ def _patch_defaults(monkeypatch):
     monkeypatch.setattr(subgen, "skip_audio_languages", [])
     monkeypatch.setattr(subgen, "only_match_subgen_subtitles", False)
     monkeypatch.setattr(subgen, "skip_if_no_audio_language_but_subtitles_exist", False)
+    monkeypatch.setattr(subgen, "skip_if_external_subtitle_languages", [])
+    monkeypatch.setattr(subgen, "ignore_forced_subtitles", True)
 
 
 class TestLrcSkip:
@@ -198,6 +200,59 @@ class TestSubtitleLanguageListSkip:
             video = tmp_path / "file.mkv"
             video.touch()
             assert should_skip_file(str(video), LanguageCode.FRENCH) is True
+
+
+class TestExternalSubtitleLanguagesSkip:
+    """SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES: skip when any external sub in a listed language exists."""
+
+    @staticmethod
+    def _setup(monkeypatch, tmp_path, langs, sub_names):
+        _patch_defaults(monkeypatch)
+        monkeypatch.setattr(subgen, "skip_if_external_subtitle_languages", langs)
+        monkeypatch.setattr(subgen, "get_subtitle_languages", lambda _path: [])
+        monkeypatch.setattr(subgen, "get_audio_languages", lambda _path: [LanguageCode.SPANISH])
+        video = tmp_path / "Movie.mkv"
+        video.touch()
+        for name in sub_names:
+            sub = tmp_path / name
+            sub.parent.mkdir(parents=True, exist_ok=True)
+            sub.touch()
+        return str(video)
+
+    @pytest.mark.parametrize(
+        "langs, sub_names, expected",
+        [
+            pytest.param([LanguageCode.ENGLISH, LanguageCode.POLISH], ["Movie.en.srt", "Movie.pl.srt"], True, id="listed-languages-present"),
+            pytest.param([LanguageCode.ENGLISH, LanguageCode.POLISH], ["Movie.pl.srt"], True, id="any-one-listed-language-suffices"),
+            pytest.param([LanguageCode.ENGLISH], ["Movie.eng.srt"], True, id="three-letter-code-matches"),
+            pytest.param([LanguageCode.ENGLISH], ["Subs/Movie.en.srt"], True, id="subfolder-subtitle-matches"),
+            pytest.param([LanguageCode.ENGLISH], ["Movie.en.forced.srt"], False, id="forced-subtitle-ignored"),
+            pytest.param([LanguageCode.ENGLISH, LanguageCode.POLISH], ["Movie.de.srt"], False, id="only-unlisted-language"),
+            pytest.param([LanguageCode.ENGLISH], ["Other.en.srt"], False, id="subtitle-for-other-video"),
+            pytest.param([LanguageCode.ENGLISH], ["Movie 2.en.srt"], False, id="subtitle-for-similarly-named-video"),
+            pytest.param([LanguageCode.ENGLISH], [], False, id="no-external-subtitles"),
+            pytest.param([], ["Movie.en.srt", "Movie.pl.srt"], False, id="option-empty"),
+        ],
+    )
+    def test_skip_decision(self, monkeypatch, tmp_path, langs, sub_names, expected):
+        video = self._setup(monkeypatch, tmp_path, langs, sub_names)
+        assert should_skip_file(video, LanguageCode.SPANISH) is expected
+
+    def test_logs_skipped_language(self, monkeypatch, tmp_path, caplog):
+        video = self._setup(monkeypatch, tmp_path, [LanguageCode.POLISH], ["Movie.pl.srt"])
+        with caplog.at_level("INFO"):
+            assert should_skip_file(video, LanguageCode.SPANISH) is True
+        assert "Skipping Movie.mkv: External subtitles in Polish already exist." in caplog.text
+
+    def test_non_subgen_subtitle_counts_with_only_subgen_flag(self, monkeypatch, tmp_path):
+        video = self._setup(monkeypatch, tmp_path, [LanguageCode.ENGLISH], ["Movie.en.srt"])
+        monkeypatch.setattr(subgen, "only_match_subgen_subtitles", True)
+        assert should_skip_file(video, LanguageCode.SPANISH) is True
+
+    def test_forced_subtitle_counts_when_forced_not_ignored(self, monkeypatch, tmp_path):
+        video = self._setup(monkeypatch, tmp_path, [LanguageCode.ENGLISH], ["Movie.en.forced.srt"])
+        monkeypatch.setattr(subgen, "ignore_forced_subtitles", False)
+        assert should_skip_file(video, LanguageCode.SPANISH) is True
 
 
 class TestTranslateForceTarget:

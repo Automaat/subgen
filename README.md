@@ -263,7 +263,8 @@ touch "/tv/Some Show/Season 1/.subgen_skip"  # skips just that season
 | Variable | Default | Description |
 |---|---|---|
 | `SKIP_IF_TARGET_SUBTITLES_EXIST` | `True` | Skips if an auto-generated subtitle in your desired language already exists. |
-| `SKIP_IF_EXTERNAL_SUBTITLES_EXIST`| `False` | Skips if an external subtitle matching `SUBTITLE_LANGUAGE_NAME` is found. |
+| `SKIP_IF_EXTERNAL_SUBTITLES_EXIST`| `False` | Skips if an external subtitle matching `SUBTITLE_LANGUAGE_NAME` is found. Only takes effect when `SUBTITLE_LANGUAGE_NAME` is set to a valid language; when it is empty (the default) this option does nothing. To skip on other languages' external subtitles, use `SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES`. |
+| `SKIP_IF_EXTERNAL_SUBTITLE_LANGUAGES` | `''` | Pipe-separated list of ISO 639-1/639-2 codes (e.g., `en\|pl`). Skips if an external subtitle file next to the media (or in a subfolder) exists in any listed language, whether or not subgen created it. `Movie.en.srt` and `Movie.eng.srt` both match `en`. Forced files (`Movie.en.forced.srt`) are ignored while `IGNORE_FORCED_SUBTITLES` is `True`. `SKIP_ONLY_SUBGEN_SUBTITLES` does not apply. |
 | `SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE`| `eng` | Skips if the file contains an embedded sub with this 3-letter code. |
 | `SKIP_SUBTITLE_LANGUAGES` | `''` | Pipe-separated list (e.g., `eng\|spa`). Skips if the file *has audio* in these languages. |
 | `SKIP_IF_AUDIO_LANGUAGES` | `''` | Pipe-separated list (ISO 639-2). Skips generation if the file has audio tracks in these languages. |
@@ -284,7 +285,7 @@ touch "/tv/Some Show/Season 1/.subgen_skip"  # skips just that season
 | Variable | Default | Description |
 |---|---|---|
 | `TRANSCRIBE_OR_TRANSLATE` | `transcribe` | `transcribe` (matches input language) or `translate` (outputs English). |
-| `SUBTITLE_LANGUAGE_NAME` | `aa` | Subtitle file name language code (e.g. `en`). Defaults to `aa` so it floats to the top of Plex's list. |
+| `SUBTITLE_LANGUAGE_NAME` | `''` | Subtitle file name language code (e.g. `en`, or `aa` so it floats to the top of Plex's list). Empty names the file after the transcribed language. |
 | `SUBTITLE_LANGUAGE_NAMING_TYPE`| `ISO_639_2_B` | Format to name files (`ISO_639_1`, `ISO_639_2_T`, `NAME`, `NATIVE`). |
 | `LRC_FOR_AUDIO_FILES` | `True` | Generates `.lrc` instead of `.srt` if processing pure audio files (e.g., mp3, flac). |
 | `WORD_LEVEL_HIGHLIGHT` | `False` | Highlights words dynamically as they are spoken in the subtitle. |
