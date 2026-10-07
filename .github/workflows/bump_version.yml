@@ -1,15 +1,26 @@
-name: Bump version
+name: Bump version and build
 
 on:
   push:
     branches: ["main"]
     paths:
       - 'subgen.py'
+      - 'language_code.py'
+      - 'launcher.py'
+      - 'requirements.txt'
+      - 'entrypoint.sh'
+      - 'Dockerfile.cpu'
+      - '.github/workflows/bump_version.yml'
+      - '.github/workflows/build_CPU.yml'
+      - '.github/actions/assert-tag-absent/**'
+  workflow_dispatch:
 
 # Prevent two bumps racing if PRs merge back-to-back
 concurrency:
   group: bump-version
   cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   bump:
@@ -18,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.ver.outputs.new }}
+      sha: ${{ steps.push.outputs.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -43,13 +57,29 @@ jobs:
           fi
 
           sed -i "s/subgen_version = '$current'/subgen_version = '$new_version'/" subgen.py
-          echo "old=$current" >> $GITHUB_OUTPUT
-          echo "new=$new_version" >> $GITHUB_OUTPUT
+          grep -q "subgen_version = '$new_version'" subgen.py
+          echo "old=$current" >> "$GITHUB_OUTPUT"
+          echo "new=$new_version" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
+        id: push
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.new }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add subgen.py
-          git commit -m "Bump version to ${{ steps.ver.outputs.new }}"
-          git push
+          git commit -m "Bump version to $NEW_VERSION"
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # GITHUB_TOKEN pushes trigger no workflows, so the bump commit is built here
+  build-cpu:
+    needs: bump
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build_CPU.yml
+    with:
+      ref: ${{ needs.bump.outputs.sha }}
+      version: ${{ needs.bump.outputs.version }}

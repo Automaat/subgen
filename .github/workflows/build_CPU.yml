@@ -1,21 +1,18 @@
 name: Build CPU Docker image
 
+# No push trigger: it would tag new code with the pre-bump version
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - 'subgen.py'
-      - 'language_code.py'
-      - 'launcher.py'
-      - 'requirements.txt'
-      - 'entrypoint.sh'
-      - 'Dockerfile.cpu'
-      - '.github/workflows/build_CPU.yml'
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build
+        required: true
+        type: string
+      version:
+        description: Expected subgen_version at that commit
+        required: true
+        type: string
   workflow_dispatch:
-
-concurrency:
-  group: docker-cpu-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -24,20 +21,32 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Never cancel: a cancelled build leaves its bumped version unpublished
+    concurrency:
+      group: docker-cpu-ghcr
+      cancel-in-progress: false
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Get version from subgen.py
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
         run: |
           version=$(grep -oP "subgen_version\s*=\s*'\K[^']+" subgen.py)
-          echo "version=$version" >> $GITHUB_ENV
+          if [ -n "$EXPECTED_VERSION" ] && [ "$version" != "$EXPECTED_VERSION" ]; then
+            echo "::error::subgen.py has $version, expected $EXPECTED_VERSION"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_ENV"
 
       - name: Set image name
         run: |
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE=ghcr.io/$owner/subgen" >> $GITHUB_ENV
+          echo "IMAGE=ghcr.io/$owner/subgen" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -48,6 +57,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite a released version
+        uses: ./.github/actions/assert-tag-absent
+        with:
+          image: ${{ env.IMAGE }}:${{ env.version }}-cpu
 
       - name: Build and push
         uses: docker/build-push-action@v5

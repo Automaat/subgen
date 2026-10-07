@@ -1,0 +1,32 @@
+name: Assert image tag absent
+description: >-
+  Fail when an immutable image tag already exists in the registry, so a
+  build never overwrites a released version. Needs buildx and, for private
+  images, a registry login.
+
+inputs:
+  image:
+    description: Full image reference including the tag
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check registry for ${{ inputs.image }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image }}
+      run: |
+        set -uo pipefail
+        if out=$(docker buildx imagetools inspect "$IMAGE_REF" 2>&1); then
+          echo "$out"
+          echo "::error::$IMAGE_REF already exists; refusing to overwrite a released version tag"
+          exit 1
+        fi
+        if grep -qiE 'not found|manifest unknown' <<<"$out"; then
+          echo "$IMAGE_REF not published yet"
+          exit 0
+        fi
+        echo "$out"
+        echo "::error::Could not check whether $IMAGE_REF exists"
+        exit 1
