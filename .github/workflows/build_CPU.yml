@@ -20,6 +20,8 @@ permissions:
 
 jobs:
   build:
+    # Manual runs only from main, so a branch build can't claim a release tag
+    if: inputs.ref != '' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Per version: a shared group would replace queued builds of other versions
     concurrency:
