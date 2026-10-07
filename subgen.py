@@ -2487,8 +2487,8 @@ def has_external_subtitle_in_language(video_file: str, target_language: Language
         if os.path.isfile(file_path) and file_path.endswith(tuple(subtitle_extensions)):
             subtitle_name, ext = os.path.splitext(file_name)
 
-            # Ensure the subtitle name starts with the video name
-            if not subtitle_name.startswith(video_name):
+            # Require a "." boundary so "Movie 2.en.srt" does not count for "Movie.mkv"
+            if subtitle_name != video_name and not subtitle_name.startswith(video_name + "."):
                 continue
 
             # Extract parts after video filename

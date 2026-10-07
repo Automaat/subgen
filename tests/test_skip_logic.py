@@ -229,6 +229,7 @@ class TestExternalSubtitleLanguagesSkip:
             pytest.param([LanguageCode.ENGLISH], ["Movie.en.forced.srt"], False, id="forced-subtitle-ignored"),
             pytest.param([LanguageCode.ENGLISH, LanguageCode.POLISH], ["Movie.de.srt"], False, id="only-unlisted-language"),
             pytest.param([LanguageCode.ENGLISH], ["Other.en.srt"], False, id="subtitle-for-other-video"),
+            pytest.param([LanguageCode.ENGLISH], ["Movie 2.en.srt"], False, id="subtitle-for-similarly-named-video"),
             pytest.param([LanguageCode.ENGLISH], [], False, id="no-external-subtitles"),
             pytest.param([], ["Movie.en.srt", "Movie.pl.srt"], False, id="option-empty"),
         ],

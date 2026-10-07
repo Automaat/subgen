@@ -206,6 +206,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
       <span class="env-desc" style="margin-bottom:6px">Skip if an external subtitle file in any of these languages exists, subgen-named or not. SKIP_ONLY_SUBGEN_SUBTITLES has no effect here.</span>
       <div class="chips" id="skipExtLangs">
         <span class="chip" data-l="english"  onclick="toggleChip(this)">english</span>
+        <span class="chip" data-l="polish"   onclick="toggleChip(this)">polish</span>
         <span class="chip" data-l="french"   onclick="toggleChip(this)">french</span>
         <span class="chip" data-l="spanish"  onclick="toggleChip(this)">spanish</span>
         <span class="chip" data-l="german"   onclick="toggleChip(this)">german</span>
@@ -256,6 +257,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
           <option value="spanish">spanish (.es)</option>
           <option value="german">german (.de)</option>
           <option value="japanese">japanese (.ja)</option>
+          <option value="polish">polish (.pl)</option>
           <option value="none">no/unknown</option>
         </select>
       </div>
@@ -335,7 +337,7 @@ function renderStreams(){
 function openAddFile(){document.getElementById('addForm').classList.add('open');updatePreview()}
 function closeAddFile(){document.getElementById('addForm').classList.remove('open')}
 function updatePreview(){
-  const tags={english:'en',french:'fr',spanish:'es',german:'de',japanese:'ja',none:''};
+  const tags={english:'en',french:'fr',spanish:'es',german:'de',japanese:'ja',polish:'pl',none:''};
   const tag=tags[v('newFileLang')]||'';
   const sub=c('newFileSubgen');
   const custom=c('newFileCustomName');
@@ -352,7 +354,7 @@ function saveFile(){
 }
 function removeFile(i){extFiles.splice(i,1);renderFiles();go()}
 function renderFiles(){
-  const tags={english:'en',french:'fr',spanish:'es',german:'de',japanese:'ja',none:''};
+  const tags={english:'en',french:'fr',spanish:'es',german:'de',japanese:'ja',polish:'pl',none:''};
   const customTag=v('subLangName').trim()||null;
   const el=document.getElementById('fileList');
   if(!extFiles.length){el.innerHTML='<div style="font-size:12px;color:var(--muted);font-style:italic;padding:4px 0">No external subtitle files</div>';return}
