@@ -15,23 +15,22 @@ on:
       - '.github/actions/assert-tag-absent/**'
   workflow_dispatch:
 
-# Prevent two bumps racing if PRs merge back-to-back
-concurrency:
-  group: bump-version
-  cancel-in-progress: false
-
 permissions: {}
 
 jobs:
   bump:
     # Skip the commit this workflow itself creates to avoid an infinite loop
-    if: "!startsWith(github.event.head_commit.message, 'Bump version to')"
+    if: github.event.head_commit.author.name != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    # Job-level, so a queued bump never waits on (or gets replaced behind) a build
+    concurrency:
+      group: bump-version
+      cancel-in-progress: false
     permissions:
       contents: write
     outputs:
       version: ${{ steps.ver.outputs.new }}
-      sha: ${{ steps.push.outputs.sha }}
+      sha: ${{ steps.ver.outputs.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,38 +39,43 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Compute new version
+      - name: Bump, commit and push
         id: ver
-        run: |
-          current=$(grep -oP "subgen_version\s*=\s*'\K[^']+" subgen.py)
-          year_now=$(date +%Y)
-          month_now=$(date +%m)
-          year_cur=$(echo "$current" | cut -d. -f1)
-          month_cur=$(echo "$current" | cut -d. -f2)
-          patch_cur=$(echo "$current" | cut -d. -f3)
-
-          if [ "$year_now" = "$year_cur" ] && [ "$month_now" = "$month_cur" ]; then
-            new_version="$year_now.$month_now.$((patch_cur + 1))"
-          else
-            new_version="$year_now.$month_now.1"
-          fi
-
-          sed -i "s/subgen_version = '$current'/subgen_version = '$new_version'/" subgen.py
-          grep -q "subgen_version = '$new_version'" subgen.py
-          echo "old=$current" >> "$GITHUB_OUTPUT"
-          echo "new=$new_version" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and push
-        id: push
-        env:
-          NEW_VERSION: ${{ steps.ver.outputs.new }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add subgen.py
-          git commit -m "Bump version to $NEW_VERSION"
-          git push origin HEAD:main
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Retry when main moves between checkout and push
+          for attempt in 1 2 3; do
+            git fetch --depth=1 origin main
+            git reset --hard origin/main
+            current=$(grep -oP "subgen_version\s*=\s*'\K[^']+" subgen.py)
+            year_now=$(date +%Y)
+            month_now=$(date +%m)
+            year_cur=$(echo "$current" | cut -d. -f1)
+            month_cur=$(echo "$current" | cut -d. -f2)
+            patch_cur=$(echo "$current" | cut -d. -f3)
+
+            if [ "$year_now" = "$year_cur" ] && [ "$month_now" = "$month_cur" ]; then
+              new_version="$year_now.$month_now.$((patch_cur + 1))"
+            else
+              new_version="$year_now.$month_now.1"
+            fi
+
+            sed -i "s/subgen_version = '$current'/subgen_version = '$new_version'/" subgen.py
+            grep -q "subgen_version = '$new_version'" subgen.py
+            git add subgen.py
+            git commit -m "Bump version to $new_version"
+            if git push origin HEAD:main; then
+              {
+                echo "old=$current"
+                echo "new=$new_version"
+                echo "sha=$(git rev-parse HEAD)"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::push attempt $attempt rejected, retrying on new main"
+          done
+          exit 1
 
   # GITHUB_TOKEN pushes trigger no workflows, so the bump commit is built here
   build-cpu:

@@ -21,9 +21,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Never cancel: a cancelled build leaves its bumped version unpublished
+    # Per version: a shared group would replace queued builds of other versions
     concurrency:
-      group: docker-cpu-ghcr
+      group: docker-cpu-${{ inputs.version || github.sha }}
       cancel-in-progress: false
 
     steps:
