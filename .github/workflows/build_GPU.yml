@@ -18,7 +18,7 @@ jobs:
       - name: Get version from subgen.py
         run: |
           version=$(grep -oP "subgen_version\s*=\s*'\K[^']+" subgen.py)
-          echo "version=$version" >> $GITHUB_ENV
+          echo "version=$version" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -28,6 +28,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Refuse to overwrite a released version
+        uses: ./.github/actions/assert-tag-absent
+        with:
+          image: docker.io/mccloud/subgen:${{ env.version }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
