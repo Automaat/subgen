@@ -145,6 +145,8 @@ path_mapping_from = os.getenv('PATH_MAPPING_FROM', r'/tv')
 path_mapping_to = os.getenv('PATH_MAPPING_TO', r'/Volumes/TV')
 model_location = os.getenv('MODEL_PATH', './models')
 monitor = convert_to_bool(os.getenv('MONITOR', False))
+# PollingObserver re-stats the whole tree every interval; watchdog's 1s default burns CPU on big libraries.
+monitor_poll_interval = float(os.getenv('MONITOR_POLL_INTERVAL', 60))
 skip_startup_scan = convert_to_bool(os.getenv('SKIP_STARTUP_SCAN', False))
 transcribe_folders = os.getenv('TRANSCRIBE_FOLDERS', '')
 transcribe_or_translate = os.getenv('TRANSCRIBE_OR_TRANSLATE', 'transcribe').lower()
@@ -2884,15 +2886,19 @@ def transcribe_existing(transcribe_folders, forceLanguage: LanguageCode = Langua
         if os.path.isfile(path):
             if has_audio(path):
                 gen_subtitles_queue(path_mapping(path), transcribe_or_translate, forceLanguage)
-    # Set up the observer to watch for new files
     if monitor:
-        observer = Observer()
-        for path in transcribe_folders:
-            if os.path.isdir(path):
-                handler = NewFileHandler()
-                observer.schedule(handler, path, recursive=True)
-        observer.start()
-        logging.info("Finished searching and queueing files for transcription. Now watching for new files.")
+        start_folder_monitor(transcribe_folders)
+
+
+def start_folder_monitor(folders):
+    """Start a polling observer that queues new media files in the given folders."""
+    observer = Observer(timeout=monitor_poll_interval)
+    for path in folders:
+        if os.path.isdir(path):
+            observer.schedule(NewFileHandler(), path, recursive=True)
+    observer.start()
+    logging.info(f"Finished searching and queueing files for transcription. Now watching for new files (polling every {monitor_poll_interval:g}s).")
+    return observer
 
 
 if __name__ == "__main__":
