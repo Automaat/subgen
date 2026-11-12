@@ -40,3 +40,7 @@ sys.modules["stable_whisper"].Segment = MagicMock()
 sys.modules["watchdog.observers.polling"].PollingObserver = MagicMock()
 # e.g. `from watchdog.events import FileSystemEventHandler`
 sys.modules["watchdog.events"].FileSystemEventHandler = object
+
+# Real attribute, so monkeypatch undo restores it instead of deleting it
+# (a deleted MagicMock attribute raises AttributeError from then on).
+sys.modules["numpy"].frombuffer = MagicMock()

@@ -244,3 +244,12 @@ class TestAsr:
         assert resp.status_code == 200
         body = resp.json()
         assert body.get("status") == "error"
+
+    @pytest.mark.parametrize("param", ["task", "output"])
+    def test_rejects_unknown_choice(self, client, param):
+        resp = client.post(
+            "/asr",
+            params={param: "bogus"},
+            files={"audio_file": ("test.wav", b"", "audio/wav")},
+        )
+        assert resp.status_code == 422
