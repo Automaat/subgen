@@ -8,6 +8,7 @@ Bugs covered:
 4. SUBTITLE_LANGUAGE_NAME set + unknown audio language skipped by generic subtitle check (#337)
 5. SKIP_ONLY_SUBGEN_SUBTITLES=True still skipped based on embedded subtitle streams (#339)
 6. TRANSCRIBE_OR_TRANSLATE=translate did not force English subtitle naming
+7. MONITOR polled TRANSCRIBE_FOLDERS every second, burning CPU while idle
 """
 import sys
 import os
@@ -434,3 +435,39 @@ class TestTranslateForcesEnglishNaming:
         detected = name_subtitle("/media/movie.mkv", LanguageCode.NORWEGIAN)
         forced = name_subtitle("/media/movie.mkv", LanguageCode.ENGLISH)
         assert detected == forced == "/media/movie.eng.srt"
+
+
+class TestFolderMonitorPollInterval:
+    @pytest.mark.parametrize("interval", [60.0, 5.0])
+    def test_observer_polls_at_configured_interval(self, monkeypatch, interval):
+        observer_cls = MagicMock()
+        monkeypatch.setattr(subgen, "Observer", observer_cls)
+        monkeypatch.setattr(subgen, "monitor_poll_interval", interval)
+
+        subgen.start_folder_monitor([])
+
+        observer_cls.assert_called_once_with(timeout=interval)
+        observer_cls.return_value.start.assert_called_once()
+
+    def test_default_interval_is_not_watchdog_one_second(self):
+        assert subgen.monitor_poll_interval == 60
+
+    def test_only_existing_directories_are_watched(self, monkeypatch, tmp_path):
+        observer_cls = MagicMock()
+        monkeypatch.setattr(subgen, "Observer", observer_cls)
+        missing = tmp_path / "missing"
+
+        subgen.start_folder_monitor([str(tmp_path), str(missing)])
+
+        scheduled = [c.args[1] for c in observer_cls.return_value.schedule.call_args_list]
+        assert scheduled == [str(tmp_path)]
+
+    def test_transcribe_existing_starts_monitor_after_scan(self, monkeypatch, tmp_path):
+        started = []
+        monkeypatch.setattr(subgen, "gen_subtitles_queue", lambda *a: None)
+        monkeypatch.setattr(subgen, "monitor", True)
+        monkeypatch.setattr(subgen, "start_folder_monitor", started.append)
+
+        transcribe_existing(str(tmp_path))
+
+        assert started == [[str(tmp_path)]]
