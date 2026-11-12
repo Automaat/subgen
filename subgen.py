@@ -60,7 +60,7 @@ import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime
 from threading import Event, Lock, Timer
-from typing import Union
+from typing import Literal, Union
 
 import av
 import faster_whisper
@@ -1020,13 +1020,13 @@ def batch(
 
 @app.post("/asr")
 async def asr(
-    task: Union[str, None] = Query(default="transcribe", enum=["transcribe", "translate"]),
+    task: Union[Literal["transcribe", "translate"], None] = Query(default="transcribe"),
     language: Union[str, None] = Query(default=None),
     video_file: Union[str, None] = Query(default=None),
     initial_prompt: Union[str, None] = Query(default=None),
     audio_file: UploadFile = File(...),
     encode: bool = Query(default=True, description="Encode audio first through ffmpeg"),
-    output: Union[str, None] = Query(default="srt", enum=["txt", "vtt", "srt", "tsv", "json"]),
+    output: Union[Literal["txt", "vtt", "srt", "tsv", "json"], None] = Query(default="srt"),
     word_timestamps: bool = Query(default=False, description="Word-level timestamps"),
 ):
     """
